@@ -1,0 +1,29 @@
+name: Free Windows desktop capability probe
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/desktop-probe.yml'
+permissions:
+  contents: read
+jobs:
+  desktop-probe:
+    if: github.event.repository.private == false
+    runs-on: windows-2022
+    timeout-minutes: 5
+    steps:
+      - name: Download public test fixture from this exact commit
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $fixtureUrl = 'https://raw.githubusercontent.com/' + $env:GITHUB_REPOSITORY + '/' + $env:GITHUB_SHA + '/DesktopProbe.cs'
+          Invoke-WebRequest -UseBasicParsing -Uri $fixtureUrl -OutFile DesktopProbe.cs
+      - name: Verify interactive desktop, real capture and mouse
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $compiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+          & $compiler /nologo /target:exe /platform:x64 /r:System.Windows.Forms.dll /r:System.Drawing.dll /out:DesktopProbe.exe DesktopProbe.cs
+          if ($LASTEXITCODE -ne 0) { throw 'PROBE_COMPILE_FAILED' }
+          & .\DesktopProbe.exe
+          if ($LASTEXITCODE -ne 0) { throw 'PROBE_ENVIRONMENT_NOT_READY' }
