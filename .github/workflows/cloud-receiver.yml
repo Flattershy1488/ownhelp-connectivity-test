@@ -1,0 +1,48 @@
+name: Real screen and mouse across Internet
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  remote-windows:
+    if: github.event.repository.private == false
+    runs-on: windows-2022
+    timeout-minutes: 8
+    steps:
+      - name: Run private recipient package on disposable desktop
+        shell: powershell
+        env:
+          OWNHELP_PACKAGE: ${{ secrets.OWNHELP_TEST_PACKAGE }}
+          OWNHELP_INVITATION: ${{ secrets.OWNHELP_TEST_INVITATION }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          try {
+            if ([string]::IsNullOrWhiteSpace($env:OWNHELP_PACKAGE) -or [string]::IsNullOrWhiteSpace($env:OWNHELP_INVITATION)) { throw 'MISSING_TEST_INPUT' }
+            $packet = [Convert]::FromBase64String($env:OWNHELP_PACKAGE)
+            $env:OWNHELP_PACKAGE = $null
+            $digest = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($packet)).Replace('-','')
+            if ($digest -ne '703C08599089125907AEAB359321661FBD50FFE14AB224C7CEFF062997E8E46D') { throw 'PACKAGE_HASH_MISMATCH' }
+            Add-Type -AssemblyName System.IO.Compression
+            $buffer = New-Object IO.MemoryStream(,$packet)
+            $archive = New-Object IO.Compression.ZipArchive($buffer,[IO.Compression.ZipArchiveMode]::Read)
+            if ($archive.Entries.Count -ne 2) { throw 'INVALID_PACKAGE' }
+            foreach ($entry in $archive.Entries) {
+              if ($entry.FullName -notin @('Receive-Help.exe','CloudRecipientTest.exe')) { throw 'INVALID_PACKAGE_ENTRY' }
+              $source = $entry.Open()
+              $destination = [IO.File]::Create((Join-Path (Get-Location) $entry.FullName))
+              $source.CopyTo($destination)
+              $destination.Dispose()
+              $source.Dispose()
+            }
+            $archive.Dispose()
+            $buffer.Dispose()
+            if ((Get-FileHash -LiteralPath 'Receive-Help.exe' -Algorithm SHA256).Hash -ne 'B53F2CE8EB716EEA2CE3BEAD93B95C66C72BC1C06D869E604960EE8EF4F83C74') { throw 'RECEIVER_HASH_MISMATCH' }
+            Write-Output 'RELEASE_0_7_HASH_VERIFIED'
+            & .\CloudRecipientTest.exe
+            if ($LASTEXITCODE -ne 0) { throw 'REMOTE_TEST_FAILED' }
+          } catch {
+            Write-Output 'REMOTE_TEST_FAILED_NO_PRIVATE_DETAILS_LOGGED'
+            exit 1
+          } finally {
+            $env:OWNHELP_INVITATION = $null
+          }
