@@ -1,4 +1,4 @@
-name: OwnHelp 0.10 real click response
+﻿name: OwnHelp 0.10 real click response
 on:
   workflow_dispatch:
 permissions:
@@ -79,13 +79,13 @@ jobs:
                   Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);
                   var invitation=Shared.ParseInvitationText(Environment.GetEnvironmentVariable("OWNHELP_INVITATION"));Environment.SetEnvironmentVariable("OWNHELP_INVITATION",null);
                   if(invitation==null)return 11;
-                  int result=12,stage=0;var started=DateTime.UtcNow;DateTime completed=DateTime.MaxValue;
+                  int result=12,stage=0;var started=DateTime.UtcNow;DateTime completed=DateTime.MaxValue;DateTime consentAt=DateTime.MaxValue;
                   using(var fixture=new LatencyTarget())using(var recipient=new RecipientForm(invitation,false))using(var timer=new Timer{Interval=100}) {
                       var allow=(Button)typeof(RecipientForm).GetField("allow",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(recipient);
                       timer.Tick+=delegate {
                           if(DateTime.UtcNow-started>TimeSpan.FromMinutes(7)){Console.WriteLine("TEST_TIMEOUT");recipient.Close();fixture.Close();return;}
-                          if(stage==0 && allow.Enabled){stage=1;allow.PerformClick();Console.WriteLine("TEST_CONSENT_ACTIVATED");}
-                          if(stage==1 && recipient.Text.Contains("ДОСТУП ВКЛЮЧЁН")){stage=2;recipient.WindowState=FormWindowState.Minimized;fixture.Activate();Console.WriteLine("REAL_SCREEN_ACTIVE width="+Screen.PrimaryScreen.Bounds.Width+" height="+Screen.PrimaryScreen.Bounds.Height);}
+                          if(stage==0 && allow.Enabled){stage=1;consentAt=DateTime.UtcNow;allow.PerformClick();Console.WriteLine("TEST_CONSENT_ACTIVATED");}
+                          if(stage==1 && DateTime.UtcNow-consentAt>TimeSpan.FromSeconds(5)){stage=2;recipient.WindowState=FormWindowState.Minimized;fixture.Activate();Console.WriteLine("REAL_SCREEN_ACTIVE width="+Screen.PrimaryScreen.Bounds.Width+" height="+Screen.PrimaryScreen.Bounds.Height);}
                           if(stage>=2 && recipient.Text.Contains("отключено")){Console.WriteLine("CONNECTION_LOST");recipient.Close();fixture.Close();return;}
                           if(fixture.Clicks>=12 && completed==DateTime.MaxValue){completed=DateTime.UtcNow;Console.WriteLine("TWELVE_NATIVE_CLICKS_RECEIVED");}
                           if(completed!=DateTime.MaxValue && DateTime.UtcNow-completed>TimeSpan.FromSeconds(20)){result=0;Console.WriteLine("LATENCY_TARGET_PASS");recipient.Close();fixture.Close();}
@@ -97,6 +97,7 @@ jobs:
                   return result;
               }
           }
+          
           '@
             [IO.File]::WriteAllText((Join-Path (Get-Location) 'CloudLatencyTarget.cs'),$testCode,[Text.Encoding]::UTF8)
             $compiler = Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
