@@ -1,0 +1,113 @@
+name: OwnHelp 0.10 real click response
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  remote-windows:
+    if: github.event.repository.private == false
+    runs-on: windows-2022
+    timeout-minutes: 8
+    steps:
+      - name: Measure actual native clicks on a disposable desktop
+        shell: powershell
+        env:
+          OWNHELP_PACKAGE: ${{ secrets.OWNHELP_TEST_PACKAGE }}
+          OWNHELP_INVITATION: ${{ secrets.OWNHELP_TEST_INVITATION }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          try {
+            if ([string]::IsNullOrWhiteSpace($env:OWNHELP_PACKAGE) -or [string]::IsNullOrWhiteSpace($env:OWNHELP_INVITATION)) { throw 'MISSING_INPUT' }
+            $packet = [Convert]::FromBase64String($env:OWNHELP_PACKAGE)
+            $env:OWNHELP_PACKAGE = $null
+            $digest = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($packet)).Replace('-','')
+            if ($digest -ne '79D6A60DE3DD0E36EA990CF163AC412BB890A50FC8D2765442B7719D60FE3837') { throw 'PACKAGE_HASH_MISMATCH' }
+            Add-Type -AssemblyName System.IO.Compression
+            $buffer = New-Object IO.MemoryStream(,$packet)
+            $archive = New-Object IO.Compression.ZipArchive($buffer,[IO.Compression.ZipArchiveMode]::Read)
+            if ($archive.Entries.Count -ne 1 -or $archive.Entries[0].FullName -ne 'Receive-Help.exe') { throw 'INVALID_PACKAGE' }
+            $source = $archive.Entries[0].Open()
+            $destination = [IO.File]::Create((Join-Path (Get-Location) 'Receive-Help.exe'))
+            $source.CopyTo($destination)
+            $destination.Dispose()
+            $source.Dispose()
+            $archive.Dispose()
+            $buffer.Dispose()
+            if ((Get-FileHash -LiteralPath 'Receive-Help.exe').Hash -ne 'BD2BAC666A551F3BEA0C93F4A994E9777F5B3BC6A80702D56A8B9104DF29BA80') { throw 'RECEIVER_HASH_MISMATCH' }
+            Write-Output 'RELEASE_0_10_HASH_VERIFIED'
+            $testCode = @'
+          using System;
+          using System.Drawing;
+          using System.Drawing.Imaging;
+          using System.Net;
+          using System.Reflection;
+          using System.Runtime.InteropServices;
+          using System.Windows.Forms;
+          using OwnHelp;
+          
+          // Disposable CI desktop only. No keyboard, file or account data is used.
+          internal sealed class LatencyTarget : Form {
+              public int Clicks;
+              private readonly Bitmap texture;
+              public LatencyTarget() {
+                  FormBorderStyle=FormBorderStyle.None;WindowState=FormWindowState.Maximized;DoubleBuffered=true;
+                  var bounds=Screen.PrimaryScreen.Bounds;
+                  texture=new Bitmap(bounds.Width,bounds.Height,PixelFormat.Format24bppRgb);
+                  var data=texture.LockBits(new Rectangle(Point.Empty,texture.Size),ImageLockMode.WriteOnly,texture.PixelFormat);
+                  try{var pixels=new byte[data.Stride*data.Height];new Random(7261).NextBytes(pixels);Marshal.Copy(pixels,0,data.Scan0,pixels.Length);}finally{texture.UnlockBits(data);}
+                  BackgroundImage=texture;
+                  var button=new Button{Text="CLICK TO MEASURE RESPONSE",Font=new Font("Segoe UI",24),Bounds=new Rectangle(bounds.Width/5,bounds.Height/3,bounds.Width*3/5,bounds.Height/4)};
+                  button.Click+=delegate{Clicks++;Console.WriteLine("NATIVE_CLICK count="+Clicks);Invalidate();};Controls.Add(button);
+              }
+              protected override void OnPaint(PaintEventArgs e) {
+                  base.OnPaint(e);int w=ClientSize.Width,h=ClientSize.Height;
+                  e.Graphics.FillRectangle(Brushes.Navy,0,0,w,h/5);
+                  for(int i=0;i<6;i++)e.Graphics.FillRectangle((Clicks&(1<<i))!=0?Brushes.White:Brushes.Black,(int)(w*(.05+i*.07)),(int)(h*.04),(int)(w*.05),(int)(h*.07));
+                  e.Graphics.FillRectangle(Brushes.Magenta,(int)(w*.85),(int)(h*.04),(int)(w*.08),(int)(h*.07));
+                  using(var font=new Font("Segoe UI",18)) {
+                      e.Graphics.DrawString("REAL CLOUD WINDOWS - click count "+Clicks,font,Brushes.White,w*.05f,h*.12f);
+                      e.Graphics.FillRectangle(Brushes.White,w/5,h*2/3,w*3/5,h/4);
+                      for(int i=0;i<5;i++)e.Graphics.DrawString("Detail test 0123456789 - text becomes clear after stopping",font,Brushes.Black,w*.22f,h*(.68f+i*.035f));
+                  }
+              }
+              protected override void Dispose(bool disposing){if(disposing)texture.Dispose();base.Dispose(disposing);}
+          }
+          internal static class CloudLatencyTarget {
+              [STAThread] static int Main() {
+                  if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true"){Console.WriteLine("CI_ONLY_GUARD");return 10;}
+                  NativeMouse.SetProcessDPIAware();ServicePointManager.SecurityProtocol=SecurityProtocolType.Tls12;ServicePointManager.DefaultConnectionLimit=8;
+                  Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);
+                  var invitation=Shared.ParseInvitationText(Environment.GetEnvironmentVariable("OWNHELP_INVITATION"));Environment.SetEnvironmentVariable("OWNHELP_INVITATION",null);
+                  if(invitation==null)return 11;
+                  int result=12,stage=0;var started=DateTime.UtcNow;DateTime completed=DateTime.MaxValue;
+                  using(var fixture=new LatencyTarget())using(var recipient=new RecipientForm(invitation,false))using(var timer=new Timer{Interval=100}) {
+                      var allow=(Button)typeof(RecipientForm).GetField("allow",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(recipient);
+                      timer.Tick+=delegate {
+                          if(DateTime.UtcNow-started>TimeSpan.FromMinutes(7)){Console.WriteLine("TEST_TIMEOUT");recipient.Close();fixture.Close();return;}
+                          if(stage==0 && allow.Enabled){stage=1;allow.PerformClick();Console.WriteLine("TEST_CONSENT_ACTIVATED");}
+                          if(stage==1 && recipient.Text.Contains("ДОСТУП ВКЛЮЧЁН")){stage=2;recipient.WindowState=FormWindowState.Minimized;fixture.Activate();Console.WriteLine("REAL_SCREEN_ACTIVE width="+Screen.PrimaryScreen.Bounds.Width+" height="+Screen.PrimaryScreen.Bounds.Height);}
+                          if(stage>=2 && recipient.Text.Contains("отключено")){Console.WriteLine("CONNECTION_LOST");recipient.Close();fixture.Close();return;}
+                          if(fixture.Clicks>=12 && completed==DateTime.MaxValue){completed=DateTime.UtcNow;Console.WriteLine("TWELVE_NATIVE_CLICKS_RECEIVED");}
+                          if(completed!=DateTime.MaxValue && DateTime.UtcNow-completed>TimeSpan.FromSeconds(20)){result=0;Console.WriteLine("LATENCY_TARGET_PASS");recipient.Close();fixture.Close();}
+                      };
+                      fixture.Shown+=delegate{Console.WriteLine("FIXTURE_READY");recipient.Show();timer.Start();};
+                      fixture.FormClosing+=delegate{timer.Stop();if(!recipient.IsDisposed)recipient.Close();};
+                      Application.Run(fixture);
+                  }
+                  return result;
+              }
+          }
+          '@
+            [IO.File]::WriteAllText((Join-Path (Get-Location) 'CloudLatencyTarget.cs'),$testCode,[Text.Encoding]::UTF8)
+            $compiler = Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
+            & $compiler /nologo /target:exe /platform:x64 /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:Receive-Help.exe /out:CloudLatencyTarget.exe CloudLatencyTarget.cs
+            if ($LASTEXITCODE -ne 0) { throw 'TEST_COMPILATION_FAILED' }
+            & .\CloudLatencyTarget.exe
+            if ($LASTEXITCODE -ne 0) { throw 'REMOTE_TEST_FAILED' }
+          } catch {
+            Write-Output 'REMOTE_TEST_FAILED_NO_PRIVATE_DETAILS_LOGGED'
+            exit 1
+          } finally {
+            $env:OWNHELP_PACKAGE = $null
+            $env:OWNHELP_INVITATION = $null
+          }
